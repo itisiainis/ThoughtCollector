@@ -1,0 +1,36 @@
+{
+  "name": "thought-collector",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "*",
+    "expo": "*",
+    "expo-document-picker": "*",
+    "expo-file-system": "*",
+    "expo-sharing": "*",
+    "expo-sqlite": "*",
+    "expo-status-bar": "*",
+    "react": "*",
+    "react-native": "*",
+    "react-native-draggable-flatlist": "^4.0.3",
+    "react-native-gesture-handler": "*",
+    "react-native-pager-view": "*",
+    "react-native-reanimated": "*",
+    "react-native-safe-area-context": "*",
+    "react-native-screens": "*",
+    "react-native-sortables": "^1.10.0"
+  },
+  "devDependencies": {
+    "@types/react": "*",
+    "babel-preset-expo": "*",
+    "expo-drizzle-studio-plugin": "*",
+    "patch-package": "^8.0.1",
+    "typescript": "*"
+  },
+  "private": true
+}

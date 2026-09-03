@@ -1,0 +1,11 @@
+node_modules/
+.expo/
+dist/
+android/app/build/
+android/build/
+android/.gradle/
+ios/build/
+ios/Pods/
+*.apk
+*.keystore
+.env

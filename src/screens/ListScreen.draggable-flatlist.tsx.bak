@@ -1,0 +1,579 @@
+// The main screen.
+//
+// Unlike the Flet version this is NOT one flat list with boundary checks.
+// NestableScrollContainer + NestableDraggableFlatList lets each section be its
+// own reorderable list inside one scroll view, so a drag physically cannot
+// cross a section - the rule falls out of the structure instead of being
+// enforced by hand.
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import {
+  NestableScrollContainer,
+  NestableDraggableFlatList,
+  RenderItemParams,
+} from 'react-native-draggable-flatlist';
+import Card from '../components/Card';
+import QuickCapture from '../components/QuickCapture';
+import { AreaEditor, TaskEditor } from '../components/Editor';
+import * as DB from '../db';
+import { dataChanged, useDataChange } from '../events';
+import { shareArea } from '../share';
+import * as T from '../theme';
+
+const SORT_LABELS: Record<string, string> = {
+  [DB.SORT_NEWEST]: 'Latest',
+  [DB.SORT_ALPHA]: 'Alphabet',
+  [DB.SORT_MANUAL]: 'Manual',
+};
+
+const SORT_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  [DB.SORT_NEWEST]: 'time-outline',
+  [DB.SORT_ALPHA]: 'text-outline',
+  [DB.SORT_MANUAL]: 'reorder-three-outline',
+};
+
+// How far a finger must travel before a held card starts moving, and how the
+// surrounding scroll behaves once it does.
+//
+// The activation distance is generous on purpose: the list arms its own pan
+// gesture at this distance, and while it is armed the scroll view underneath
+// cannot start. Too small a number and an ordinary flick that happens to begin
+// on a card does nothing at all.
+//
+// The speed is now a per-frame step rather than the length of an animated jump
+// - see the note in the patched useNestedAutoScroll. It used to be fast enough
+// to fly past the item you were reaching for, so it is now slow enough to
+// track by eye.
+const DRAG_ACTIVATION = 20;
+const AUTOSCROLL_THRESHOLD = 60;
+const AUTOSCROLL_SPEED = 4;
+
+export default function ListScreen() {
+  const [areas, setAreas] = useState<DB.Area[]>([]);
+  const [rogue, setRogue] = useState<DB.Task[]>([]);
+  const [byArea, setByArea] = useState<Record<number, DB.Task[]>>({});
+  const [areaSort, setAreaSort] = useState<string>(DB.SORT_NEWEST);
+  const [rogueSort, setRogueSort] = useState<string>(DB.SORT_NEWEST);
+  const [showRail, setShowRail] = useState(false);
+
+  // The task list currently being reordered ('rogue' or `area:<id>`), or null.
+  // While it is set, every card in that same list folds its description and
+  // clips its name - see the note on Card's forceCollapsed prop.
+  const [collapseSection, setCollapseSection] = useState<string | null>(null);
+
+  // Letting the cards spring back open on the same commit that reorders the
+  // data changes every cell's height in the one frame the list is re-measuring
+  // itself - exactly the frame that must stay quiet. A frame's delay keeps the
+  // two apart without being perceptible.
+  const expandAfterDrop = useCallback(() => {
+    requestAnimationFrame(() => setCollapseSection(null));
+  }, []);
+
+  // Which descriptions are folded away. It lives out here because cards are
+  // rebuilt on every refresh, and in the database because it should still be
+  // true tomorrow: a card nobody has closed is open, and one closed last night
+  // is still closed this morning.
+  const [closed, setClosed] = useState<Record<string, true>>({});
+
+  const [editingArea, setEditingArea] = useState<{ open: boolean; area: DB.Area | null }>(
+    {
+      open: false,
+      area: null,
+    },
+  );
+  const [editingTask, setEditingTask] = useState<{
+    open: boolean;
+    task: DB.Task | null;
+    areaId: number | null;
+  }>({ open: false, task: null, areaId: null });
+
+  const scrollRef = useRef<any>(null);
+  const offsets = useRef<Record<string, number>>({});
+
+  const refresh = useCallback(async () => {
+    const nextAreas = await DB.listAreas();
+    const nextRogue = await DB.listTasks(null);
+    const map: Record<number, DB.Task[]> = {};
+    for (const area of nextAreas) map[area.id] = await DB.listTasks(area.id);
+    setAreas(nextAreas);
+    setRogue(nextRogue);
+    setByArea(map);
+    setAreaSort(await DB.getState('area_sort_mode'));
+    setRogueSort(await DB.getState('rogue_sort_mode'));
+    setClosed(await DB.closedCards());
+    setShowRail((await DB.getState(DB.SHOW_RAIL)) === '1');
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // Also reload when another screen writes - a restore from the trash lands
+  // here without the screen having to be rebuilt from scratch.
+  useDataChange(refresh);
+
+  const toggleCard = (key: string) => {
+    const nowClosed = !closed[key];
+    setClosed((prev) => {
+      const next = { ...prev };
+      if (nowClosed) next[key] = true;
+      else delete next[key];
+      return next;
+    });
+    DB.setCardClosed(key, nowClosed);
+  };
+
+  const jump = (key: string) => {
+    const y = offsets.current[key];
+    if (y != null) scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
+  };
+
+  // ------------------------------------------------------------- sorting
+
+  const cycleSort = async (
+    current: string,
+    apply: (next: DB.SortMode) => Promise<void>,
+  ) => {
+    const at = DB.SORT_CYCLE.indexOf(current as DB.SortMode);
+    await apply(DB.SORT_CYCLE[(at + 1) % DB.SORT_CYCLE.length]);
+    refresh();
+  };
+
+  // ------------------------------------------------------------- rendering
+
+  const renderArea = ({ item, drag, isActive }: RenderItemParams<DB.Area>) => (
+    <Card
+      name={item.name}
+      description={item.description}
+      bodyColor={item.color}
+      open={!closed[`area:${item.id}`]}
+      onToggle={() => toggleCard(`area:${item.id}`)}
+      onOpen={() => setEditingArea({ open: true, area: item })}
+      onDelete={async () => {
+        await DB.trashArea(item.id);
+        dataChanged();
+      }}
+      onDrag={drag}
+      dragging={isActive}
+      railSpacing={showRail}
+    />
+  );
+
+  const renderTask = ({ item, drag, isActive }: RenderItemParams<DB.Task>) => {
+    const sectionKey = item.area_id == null ? 'rogue' : `area:${item.area_id}`;
+    return (
+      <Card
+        name={item.name}
+        description={item.description}
+        bodyColor={T.TASK_CARD}
+        open={!closed[`task:${item.id}`]}
+        onToggle={() => toggleCard(`task:${item.id}`)}
+        onOpen={() => setEditingTask({ open: true, task: item, areaId: item.area_id })}
+        onDelete={async () => {
+          await DB.trashTask(item.id);
+          dataChanged();
+        }}
+        onDrag={drag}
+        onDragPrepare={() => setCollapseSection(sectionKey)}
+        onDragCancel={() => setCollapseSection(null)}
+        dragging={isActive}
+        rounded
+        forceCollapsed={collapseSection === sectionKey}
+        railSpacing={showRail}
+      />
+    );
+  };
+
+  return (
+    <View style={styles.root}>
+      <NestableScrollContainer
+        ref={scrollRef}
+        contentContainerStyle={{ paddingBottom: T.NAV_HEIGHT + 20 }}
+        // Without this the first tap anywhere just dismisses the keyboard and
+        // never reaches the button underneath.
+        keyboardShouldPersistTaps="handled"
+      >
+        <QuickCapture areas={areas} onSaved={dataChanged} />
+
+        {/* Everything below the capture block. A touch that starts in here puts
+            the keyboard away, which is also what folds the capture drawer shut;
+            capturing and returning false means the touch still reaches whatever
+            it landed on. The block itself is outside, or tapping into its own
+            description field would close it. */}
+        <View
+          onStartShouldSetResponderCapture={() => {
+            Keyboard.dismiss();
+            return false;
+          }}
+        >
+          <SectionRule gap={T.RULE_GAP_FIXED} topGap={T.CARD_GAP} />
+
+          <SectionHeader
+            label="Areas"
+            sort={areaSort}
+            onSort={() =>
+              cycleSort(areaSort, (next) => DB.setState('area_sort_mode', next))
+            }
+            onAdd={() => setEditingArea({ open: true, area: null })}
+            onLayoutY={(y) => (offsets.current['areas'] = y)}
+            railSpacing={showRail}
+          />
+          {areas.length ? (
+            <NestableDraggableFlatList
+              data={areas}
+              keyExtractor={(a) => `area-${a.id}`}
+              renderItem={renderArea}
+              activationDistance={DRAG_ACTIVATION}
+              autoscrollThreshold={AUTOSCROLL_THRESHOLD}
+              autoscrollSpeed={AUTOSCROLL_SPEED}
+              onDragEnd={async ({ data }) => {
+                // Show the new arrangement at once and only then write it. Waiting
+                // for the database meant the list snapped back to the old order
+                // for a second before the reload caught up.
+                setAreas(data);
+                setAreaSort(DB.SORT_MANUAL);
+                // Dragging is itself the switch into manual mode.
+                await DB.setState('area_sort_mode', DB.SORT_MANUAL);
+                await DB.reorder(
+                  'areas',
+                  data.map((a) => a.id),
+                );
+              }}
+            />
+          ) : (
+            <Empty
+              message="You haven't yet created any areas"
+              onAdd={() => setEditingArea({ open: true, area: null })}
+            />
+          )}
+          <SectionRule gap={T.RULE_GAP_FIXED} />
+
+          <SectionHeader
+            label="Rogue Tasks"
+            sort={rogueSort}
+            onSort={() =>
+              cycleSort(rogueSort, (next) => DB.setState('rogue_sort_mode', next))
+            }
+            onAdd={() => setEditingTask({ open: true, task: null, areaId: null })}
+            onLayoutY={(y) => (offsets.current['rogue'] = y)}
+            railSpacing={showRail}
+          />
+          {rogue.length ? (
+            <NestableDraggableFlatList
+              data={rogue}
+              keyExtractor={(t) => `rogue-${t.id}`}
+              renderItem={renderTask}
+              activationDistance={DRAG_ACTIVATION}
+              autoscrollThreshold={AUTOSCROLL_THRESHOLD}
+              autoscrollSpeed={AUTOSCROLL_SPEED}
+              onDragEnd={async ({ data }) => {
+                expandAfterDrop();
+                setRogue(data);
+                setRogueSort(DB.SORT_MANUAL);
+                await DB.setState('rogue_sort_mode', DB.SORT_MANUAL);
+                await DB.reorder(
+                  'tasks',
+                  data.map((t) => t.id),
+                );
+              }}
+            />
+          ) : (
+            <Empty
+              message="No rogue tasks yet"
+              onAdd={() => setEditingTask({ open: true, task: null, areaId: null })}
+            />
+          )}
+          <SectionRule gap={T.RULE_GAP_FIXED} />
+
+          {areas.map((area, position) => (
+            // The offset is measured on the wrapper, not on the header inside it:
+            // a child's layout.y is relative to its parent, so the header's own
+            // was always ~0 and the rail's dot jumped to the top of the list.
+            <View
+              key={area.id}
+              onLayout={(e) =>
+                (offsets.current[`area:${area.id}`] = e.nativeEvent.layout.y)
+              }
+            >
+              <SectionHeader
+                label={area.name}
+                suffix=" tasks"
+                accent={area.color}
+                sort={area.task_sort_mode}
+                onSort={() =>
+                  cycleSort(area.task_sort_mode, (next) =>
+                    DB.updateArea(area.id, { task_sort_mode: next }),
+                  )
+                }
+                onAdd={() => setEditingTask({ open: true, task: null, areaId: area.id })}
+                onShare={() => shareArea(area, byArea[area.id] ?? [])}
+                railSpacing={showRail}
+              />
+              {(byArea[area.id] ?? []).length ? (
+                <NestableDraggableFlatList
+                  data={byArea[area.id]}
+                  keyExtractor={(t) => `t-${t.id}`}
+                  renderItem={renderTask}
+                  activationDistance={DRAG_ACTIVATION}
+                  autoscrollThreshold={AUTOSCROLL_THRESHOLD}
+                  autoscrollSpeed={AUTOSCROLL_SPEED}
+                  onDragEnd={async ({ data }) => {
+                    expandAfterDrop();
+                    setByArea((prev) => ({ ...prev, [area.id]: data }));
+                    setAreas((prev) =>
+                      prev.map((a) =>
+                        a.id === area.id ? { ...a, task_sort_mode: DB.SORT_MANUAL } : a,
+                      ),
+                    );
+                    await DB.updateArea(area.id, { task_sort_mode: DB.SORT_MANUAL });
+                    await DB.reorder(
+                      'tasks',
+                      data.map((t) => t.id),
+                    );
+                  }}
+                />
+              ) : (
+                <Empty
+                  message="No tasks here yet"
+                  onAdd={() =>
+                    setEditingTask({ open: true, task: null, areaId: area.id })
+                  }
+                />
+              )}
+              {/* No line under the last one - there is nothing left to separate. */}
+              {position < areas.length - 1 && <SectionRule gap={T.RULE_GAP_AREA} />}
+            </View>
+          ))}
+        </View>
+      </NestableScrollContainer>
+
+      {/* Fixed rail: one dot per destination, stays put while the list scrolls.
+          Off by default - see the Display toggle in Settings. */}
+      {showRail && (
+        <View style={styles.rail} pointerEvents="box-none">
+          <Dot label="A" color={T.NEUTRAL_GREY} onPress={() => jump('areas')} />
+          <Dot label="R" color={T.NEUTRAL_GREY} onPress={() => jump('rogue')} />
+          {areas.slice(0, T.MAX_AREAS).map((a) => (
+            <Dot
+              key={a.id}
+              label={(a.name.trim()[0] ?? '?').toUpperCase()}
+              color={a.color}
+              onPress={() => jump(`area:${a.id}`)}
+            />
+          ))}
+        </View>
+      )}
+
+      <AreaEditor
+        visible={editingArea.open}
+        area={editingArea.area}
+        onClose={() => setEditingArea({ open: false, area: null })}
+        onChanged={dataChanged}
+      />
+      <TaskEditor
+        visible={editingTask.open}
+        task={editingTask.task}
+        areaId={editingTask.areaId}
+        areas={areas}
+        onClose={() => setEditingTask({ open: false, task: null, areaId: null })}
+        onChanged={dataChanged}
+      />
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------- pieces
+
+/**
+ * Name and + sit together on a solid band in the section's own colour, muted
+ * and darkened so the pair reads as one control: the + belongs to that name,
+ * not to the row. The sort button keeps its place on the right, held clear of
+ * the floating rail.
+ */
+function SectionHeader({
+  label,
+  suffix = '',
+  accent,
+  sort,
+  onSort,
+  onAdd,
+  onShare,
+  onLayoutY,
+  railSpacing = false,
+}: {
+  label: string;
+  suffix?: string;
+  accent?: string;
+  sort: string;
+  onSort: () => void;
+  onAdd: () => void;
+  onShare?: () => void;
+  onLayoutY?: (y: number) => void;
+  railSpacing?: boolean;
+}) {
+  // The band keeps the area's own colour; the darker, greyer version of it goes
+  // to the + alone, which is the only part of the band that does anything.
+  const band = accent ?? T.NEUTRAL_GREY;
+  const ink = T.readableOn(band);
+  const plus = T.pressableColor(band);
+  const plusInk = T.readableOn(plus);
+
+  return (
+    <View onLayout={(e) => onLayoutY?.(e.nativeEvent.layout.y)}>
+      <View
+        style={[
+          styles.header,
+          { paddingRight: T.EDGE_GAP + (railSpacing ? T.RAIL_WIDTH : 0) },
+        ]}
+      >
+        {/* The fill is as wide as the name and no wider. A long name wraps
+            inside it rather than stretching it across the row. */}
+        <View style={[styles.band, { backgroundColor: band }]}>
+          {/* The name carries the weight; the "tasks" after it is plain, so
+              the two do not read as one long title. */}
+          <Text style={[styles.headerText, { color: ink }]}>
+            <Text style={[styles.headerName, accent ? styles.headerAccent : null]}>
+              {label}
+            </Text>
+            {suffix}
+          </Text>
+        </View>
+
+        {/* Beside the name but not on it: its own circle in the same darker
+            colour, next to the section it adds to rather than off at the far
+            side of the row with the controls that act on the whole list. */}
+        <Pressable
+          onPress={onAdd}
+          hitSlop={8}
+          style={[styles.bandAdd, { backgroundColor: plus }]}
+        >
+          <Ionicons name="add" size={20} color={plusInk} />
+        </Pressable>
+
+        <View style={styles.gap} />
+
+        <View style={styles.headerActions}>
+          {onShare && (
+            <Pressable onPress={onShare} hitSlop={8} style={styles.iconButton}>
+              <Ionicons name="share-social-outline" size={17} color="#000000DE" />
+            </Pressable>
+          )}
+          <Pressable onPress={onSort} style={styles.sortButton} hitSlop={6}>
+            <Ionicons name={SORT_ICONS[sort]} size={16} color="#000000DE" />
+            <Text style={styles.sortLabel}>{SORT_LABELS[sort]}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Closes off the section above it. See RULE_GAP_FIXED in theme.ts. */
+function SectionRule({ gap, topGap = 0 }: { gap: number; topGap?: number }) {
+  return (
+    <>
+      {topGap > 0 && <View style={{ height: topGap }} />}
+      <View style={styles.rule} />
+      <View style={{ height: gap }} />
+    </>
+  );
+}
+
+function Empty({ message, onAdd }: { message: string; onAdd: () => void }) {
+  return (
+    <Pressable onPress={onAdd} style={styles.empty}>
+      <Text style={{ color: T.TEXT_MUTED }}>{message}</Text>
+      <Ionicons name="add" size={20} color={T.ACCENT} />
+    </Pressable>
+  );
+}
+
+function Dot({
+  label,
+  color,
+  onPress,
+}: {
+  label: string;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable onPress={onPress} style={[styles.dot, { backgroundColor: color }]}>
+      <Text style={styles.dotText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: T.PAGE_BG, paddingHorizontal: T.PAGE_PADDING },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: 4,
+    // paddingRight is applied inline: only when the rail is showing, or it
+    // sits on top of the sort button.
+  },
+  // Square, deliberately: the rounded shape now belongs to the task cards.
+  band: {
+    flexShrink: 1,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  bandAdd: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+    flexShrink: 0,
+  },
+  // Holds the sort and share buttons out at the right edge without dragging
+  // the + along with them.
+  gap: { flex: 1, minWidth: 8 },
+  headerText: { fontSize: 19, flexShrink: 1 },
+  headerName: { fontWeight: 'bold' },
+  headerAccent: { fontStyle: 'italic' },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 8,
+    // Never squeezed by a long name - the name wraps instead.
+    flexShrink: 0,
+  },
+  iconButton: { paddingHorizontal: 5 },
+  sortButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 4,
+  },
+  sortLabel: { fontSize: 12 },
+  rule: { height: 1, backgroundColor: T.RULE_COLOR },
+  empty: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 4,
+    padding: 8,
+  },
+  rail: {
+    position: 'absolute',
+    right: 4,
+    top: 0,
+    bottom: T.NAV_HEIGHT,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  dot: {
+    width: T.RAIL_DOT_SIZE,
+    height: T.RAIL_DOT_SIZE,
+    borderRadius: T.RAIL_DOT_SIZE / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dotText: { color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' },
+});

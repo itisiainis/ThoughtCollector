@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Thought Collector",
+    "slug": "ThoughtCollector",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.ainis.ideacollector",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#6E92C4"
+      }
+    },
+    "plugins": [
+      "expo-sqlite"
+    ],
+    "newArchEnabled": true,
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#6E92C4"
+    }
+  }
+}
