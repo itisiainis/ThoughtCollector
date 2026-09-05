@@ -11,6 +11,7 @@
     "@expo/vector-icons": "*",
     "expo": "~57.0.20",
     "expo-clipboard": "*",
+    "expo-dev-client": "~57.0.18",
     "expo-document-picker": "*",
     "expo-file-system": "*",
     "expo-font": "~57.0.3",
