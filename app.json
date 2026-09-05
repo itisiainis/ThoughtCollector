@@ -10,7 +10,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#6E92C4"
-      }
+      },
+      "runtimeVersion": "1.0.0"
     },
     "plugins": [
       "expo-sqlite",
@@ -23,6 +24,19 @@
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#6E92C4"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "311e9c46-6962-4646-aa0e-8f0e9d3ec11a"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/311e9c46-6962-4646-aa0e-8f0e9d3ec11a"
+    },
+    "ios": {
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     }
   }
 }

@@ -17,6 +17,7 @@
     "expo-sharing": "~57.0.18",
     "expo-sqlite": "~57.0.2",
     "expo-status-bar": "*",
+    "expo-updates": "~57.0.21",
     "react": "*",
     "react-native": "0.86.3",
     "react-native-draggable-flatlist": "^4.0.3",
