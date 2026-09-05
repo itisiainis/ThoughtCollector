@@ -13,7 +13,9 @@
       }
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-sharing",
+      "expo-font"
     ],
     "newArchEnabled": true,
     "icon": "./assets/icon.png",

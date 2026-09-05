@@ -24,7 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AreaChips from './AreaChips';
 import Flash, { useFlash } from './Flash';
 import * as DB from '../db';
-import { shareArea, shareTask } from '../share';
+import { copyArea, copyTask, shareArea, shareTask } from '../share';
 import * as T from '../theme';
 
 const TOP_GAP = 12;
@@ -90,9 +90,24 @@ export function AreaEditor({ visible, area, onClose, onChanged }: AreaEditorProp
     onClose();
   };
 
+  // Both hand out the same text; only the destination differs. The name and
+  // description come from the fields rather than from `area`, so what leaves
+  // the dialog is what is on the screen - edits write through as you type, but
+  // the row this dialog was opened from is a render behind.
+  const outgoing = async (edited: DB.Area) =>
+    [
+      { ...edited, name: name.trim() || edited.name, description },
+      await DB.listTasks(edited.id),
+    ] as const;
+
   const share = async () => {
     if (!area) return;
-    await shareArea(area, await DB.listTasks(area.id));
+    await shareArea(...(await outgoing(area)));
+  };
+
+  const copy = async () => {
+    if (!area) return;
+    await copyArea(...(await outgoing(area)));
   };
 
   return (
@@ -101,6 +116,7 @@ export function AreaEditor({ visible, area, onClose, onChanged }: AreaEditorProp
       title={creating ? 'New area' : 'Area'}
       onDismiss={close}
       onShare={creating ? undefined : share}
+      onCopy={creating ? undefined : copy}
     >
       <GrowingInput
         ref={nameRef}
@@ -220,10 +236,21 @@ export function TaskEditor({
     onClose();
   };
 
+  // As in the area editor: the text is built from the fields, not from `task`,
+  // so it carries what is on the screen right now.
+  const outgoing = (edited: DB.Task) => {
+    const area = chosenArea == null ? null : areas.find((a) => a.id === chosenArea);
+    return [{ ...edited, name, description }, area?.name ?? null] as const;
+  };
+
   const share = async () => {
     if (!task) return;
-    const area = chosenArea == null ? null : areas.find((a) => a.id === chosenArea);
-    await shareTask({ ...task, name, description }, area?.name ?? null);
+    await shareTask(...outgoing(task));
+  };
+
+  const copy = async () => {
+    if (!task) return;
+    await copyTask(...outgoing(task));
   };
 
   return (
@@ -232,6 +259,7 @@ export function TaskEditor({
       title={creating ? 'New task' : 'Task'}
       onDismiss={close}
       onShare={creating ? undefined : share}
+      onCopy={creating ? undefined : copy}
     >
       <GrowingInput
         ref={nameRef}
@@ -343,12 +371,14 @@ function Shell({
   title,
   onDismiss,
   onShare,
+  onCopy,
   children,
 }: {
   visible: boolean;
   title: string;
   onDismiss: () => void;
   onShare?: () => void;
+  onCopy?: () => void;
   children: React.ReactNode;
 }) {
   const { height: screenHeight } = useWindowDimensions();
@@ -380,11 +410,20 @@ function Shell({
           >
             <View style={styles.titleRow}>
               <Text style={styles.dialogTitle}>{title}</Text>
-              {onShare && (
-                <Pressable onPress={onShare} hitSlop={10} style={styles.shareButton}>
-                  <Ionicons name="share-social-outline" size={22} color="#1565C0" />
-                </Pressable>
-              )}
+              {/* Same pair, same order as a section header's: copy first, then
+                  share. */}
+              <View style={styles.titleActions}>
+                {onCopy && (
+                  <Pressable onPress={onCopy} hitSlop={10} style={styles.shareButton}>
+                    <Ionicons name="copy-outline" size={22} color="#1565C0" />
+                  </Pressable>
+                )}
+                {onShare && (
+                  <Pressable onPress={onShare} hitSlop={10} style={styles.shareButton}>
+                    <Ionicons name="share-social-outline" size={22} color="#1565C0" />
+                  </Pressable>
+                )}
+              </View>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
           </Pressable>
@@ -437,6 +476,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   dialogTitle: { fontSize: 22, fontWeight: '600' },
+  titleActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   shareButton: { paddingHorizontal: 4, paddingVertical: 2 },
   input: {
     borderWidth: 1,

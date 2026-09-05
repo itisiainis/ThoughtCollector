@@ -41,22 +41,54 @@ export default function QuickCapture({ areas, onSaved }: Props) {
   // next. A blur is only really a blur if nothing takes focus straight after.
   const closing = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // A save is not a dismissal either, and it is the one hand-off the timer
+  // above cannot be trusted to cover. Enter on an empty description has to
+  // blur the field to count as a submit at all (a multiline field that does
+  // not blur inserts a newline instead), so the close timer starts running
+  // while the task is still being written - and the focus that would cancel
+  // it only comes back after the database has answered. Anything slower than
+  // those 120ms shut the drawer just as the cursor returned for the next
+  // thought, which is exactly the moment the block is meant to stay open.
+  const saving = useRef(false);
+  const giveUp = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Whether either field currently holds focus. The keyboard going away only
+  // means the user is done when nothing is focused: Android hides and re-shows
+  // it while focus moves from one field to the other, and that flicker arrives
+  // as a keyboardDidHide like any real dismissal. Waiting 120ms before acting
+  // on it is not enough - the hide event itself is delayed by the keyboard's
+  // own animation, so it can land well after focus has already come back.
+  const hasFocus = useRef(false);
+
   // Only a description in progress holds the drawer open. The name stays
   // visible in the collapsed field either way, so nothing typed is ever hidden
   // by closing - and tapping away from a block opened by accident should shut
   // it, not leave it standing.
   const held = () => description.trim().length > 0;
 
+  const scheduleClose = () => {
+    if (closing.current) clearTimeout(closing.current);
+    if (saving.current) return;
+    closing.current = setTimeout(() => {
+      if (!held() && !hasFocus.current) setOpen(false);
+    }, 120);
+  };
+
   const focused = () => {
+    hasFocus.current = true;
+    // Focus is back where the save was sending it - the hand-off is over.
+    saving.current = false;
     if (closing.current) clearTimeout(closing.current);
     setOpen(true);
   };
 
   const blurred = () => {
-    if (closing.current) clearTimeout(closing.current);
-    closing.current = setTimeout(() => {
-      if (!held()) setOpen(false);
-    }, 120);
+    hasFocus.current = false;
+    scheduleClose();
+  };
+
+  const keyboardHidden = () => {
+    if (!hasFocus.current) scheduleClose();
   };
 
   // Name and description only - the area stays chosen, the same way SAVE
@@ -76,6 +108,15 @@ export default function QuickCapture({ areas, onSaved }: Props) {
 
   const save = async () => {
     if (!name.trim()) return;
+    // Set before the first await, so the blur that Enter causes is already
+    // covered by the time it arrives.
+    saving.current = true;
+    // Cleared by focused() the moment the name field takes it back. This is
+    // only the backstop for a focus that never lands - without it the drawer
+    // would be held open for good.
+    if (giveUp.current) clearTimeout(giveUp.current);
+    giveUp.current = setTimeout(() => (saving.current = false), 800);
+
     await DB.createTask(name.trim(), description.trim(), areaId);
     clearFields();
     // Emptied, not closed - and the cursor goes back where the next thought
@@ -88,11 +129,11 @@ export default function QuickCapture({ areas, onSaved }: Props) {
 
   // Tapping anywhere outside dismisses the keyboard - the list container is
   // what does that - and the drawer follows it down through the same debounced
-  // check blurred() uses. Closing immediately on keyboardDidHide would also
-  // catch the keyboard's brief flicker while focus hands off from the name
-  // field to the description field, which is not a dismissal at all.
+  // check a blur uses. It asks first whether a field still holds focus, since
+  // the keyboard's brief flicker during a hand-off between the two fields
+  // arrives here as a hide and is not a dismissal at all.
   useEffect(() => {
-    const hidden = Keyboard.addListener('keyboardDidHide', blurred);
+    const hidden = Keyboard.addListener('keyboardDidHide', keyboardHidden);
     return () => hidden.remove();
   });
 

@@ -5,7 +5,8 @@
 // to send it with. Plain text on purpose: it arrives intact in a messenger,
 // where markdown syntax would arrive as literal asterisks.
 
-import { Share } from 'react-native';
+import { Platform, Share, ToastAndroid } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import type { Area, Task } from './db';
 
 const RULE = '─────────────';
@@ -67,3 +68,24 @@ export const shareTask = (task: Task, areaName?: string | null) =>
 
 export const shareArea = (area: Area, tasks: Task[]) =>
   shareText(area.name.trim(), areaText(area, tasks));
+
+/**
+ * The same text, put straight on the clipboard instead of through the system
+ * sheet. The sheet is the right thing when the thought is going somewhere
+ * specific; this is for when it is going wherever the cursor happens to be -
+ * a note already open, a field halfway through being filled in - which the
+ * sheet cannot offer as a destination at all.
+ *
+ * A toast because a copy is otherwise invisible: nothing on the screen moves,
+ * and a button that appears to do nothing is one nobody presses twice.
+ */
+export async function copyText(body: string): Promise<void> {
+  await Clipboard.setStringAsync(body);
+  if (Platform.OS === 'android') ToastAndroid.show('Copied', ToastAndroid.SHORT);
+}
+
+export const copyTask = (task: Task, areaName?: string | null) =>
+  copyText(taskText(task, areaName));
+
+export const copyArea = (area: Area, tasks: Task[]) =>
+  copyText(areaText(area, tasks));
