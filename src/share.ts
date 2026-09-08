@@ -1,11 +1,11 @@
-// Sharing a thought with a person, as opposed to exporting it for a machine.
-//
-// The backup in db.ts is JSON and the markdown dump is a whole document; this
-// is the third case - one task or one area, handed to whatever the phone offers
-// to send it with. Plain text on purpose: it arrives intact in a messenger,
-// where markdown syntax would arrive as literal asterisks.
+// Handing a thought to the clipboard, as opposed to exporting it for a
+// machine (the JSON/markdown backups in db.ts) or through the system's own
+// share sheet (dropped - copy does the same job in fewer taps, straight into
+// whatever the cursor is already sitting in). Plain text on purpose: it
+// arrives intact in a messenger, where markdown syntax would arrive as
+// literal asterisks.
 
-import { Platform, Share, ToastAndroid } from 'react-native';
+import { Platform, ToastAndroid } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import type { Area, Task } from './db';
 
@@ -28,16 +28,18 @@ function stamp(iso: string): string {
 export function taskText(task: Task, areaName?: string | null): string {
   const parts = [task.name.trim()];
   if (task.description.trim()) parts.push('', task.description.trim());
-  parts.push('', RULE, areaName ? `${areaName} · ${stamp(task.created_at)}` : stamp(task.created_at));
+  parts.push(
+    '',
+    RULE,
+    areaName ? `${areaName} · ${stamp(task.created_at)}` : stamp(task.created_at),
+  );
   return parts.join('\n');
 }
 
-/** A whole area: its own description, then every task in it as a bullet. */
-export function areaText(area: Area, tasks: Task[]): string {
-  const parts = [area.name.trim().toUpperCase()];
-  if (area.description.trim()) parts.push('', area.description.trim());
-  parts.push('');
-
+/** Every task in a list, one bullet each - the part an area and a loose
+ * group of tasks share. */
+function tasksBlock(tasks: Task[]): string {
+  const parts: string[] = [];
   if (!tasks.length) {
     parts.push('(nothing here yet)');
   } else {
@@ -48,33 +50,32 @@ export function areaText(area: Area, tasks: Task[]): string {
     }
     parts.pop();
   }
+  return parts.join('\n');
+}
+
+/** A whole area: its own description, then every task in it as a bullet. */
+export function areaText(area: Area, tasks: Task[]): string {
+  const parts = [area.name.trim().toUpperCase()];
+  if (area.description.trim()) parts.push('', area.description.trim());
+  parts.push('', tasksBlock(tasks));
 
   const count = tasks.length === 1 ? '1 thought' : `${tasks.length} thoughts`;
   parts.push('', RULE, count);
   return parts.join('\n');
 }
 
-/** Hands the text to the system sheet. Cancelling is not an error. */
-export async function shareText(title: string, body: string): Promise<void> {
-  try {
-    await Share.share({ title, message: body });
-  } catch {
-    // Nothing useful to say - the sheet either opened or the user backed out.
-  }
+/** A loose group of tasks with no area of their own - Rogue Tasks. */
+export function tasksText(title: string, tasks: Task[]): string {
+  const parts = [title.trim().toUpperCase(), '', tasksBlock(tasks)];
+
+  const count = tasks.length === 1 ? '1 thought' : `${tasks.length} thoughts`;
+  parts.push('', RULE, count);
+  return parts.join('\n');
 }
 
-export const shareTask = (task: Task, areaName?: string | null) =>
-  shareText(task.name.trim(), taskText(task, areaName));
-
-export const shareArea = (area: Area, tasks: Task[]) =>
-  shareText(area.name.trim(), areaText(area, tasks));
-
 /**
- * The same text, put straight on the clipboard instead of through the system
- * sheet. The sheet is the right thing when the thought is going somewhere
- * specific; this is for when it is going wherever the cursor happens to be -
- * a note already open, a field halfway through being filled in - which the
- * sheet cannot offer as a destination at all.
+ * Puts text straight on the clipboard, wherever the cursor happens to be -
+ * a note already open, a field halfway through being filled in.
  *
  * A toast because a copy is otherwise invisible: nothing on the screen moves,
  * and a button that appears to do nothing is one nobody presses twice.
@@ -87,5 +88,7 @@ export async function copyText(body: string): Promise<void> {
 export const copyTask = (task: Task, areaName?: string | null) =>
   copyText(taskText(task, areaName));
 
-export const copyArea = (area: Area, tasks: Task[]) =>
-  copyText(areaText(area, tasks));
+export const copyArea = (area: Area, tasks: Task[]) => copyText(areaText(area, tasks));
+
+export const copyTasks = (title: string, tasks: Task[]) =>
+  copyText(tasksText(title, tasks));

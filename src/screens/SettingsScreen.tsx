@@ -6,7 +6,15 @@
 // Flet version, since the format is unchanged.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import {
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from 'react-native';
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
@@ -55,7 +63,11 @@ export default function SettingsScreen() {
     try {
       const stamp = new Date().toISOString().slice(0, 10);
       setStatus(
-        await write(`tasks-backup-${stamp}.json`, await DB.dumpBackup(), 'application/json')
+        await write(
+          `tasks-backup-${stamp}.json`,
+          await DB.dumpBackup(),
+          'application/json',
+        ),
       );
     } catch (error) {
       setStatus(`Export failed: ${error}`);
@@ -65,51 +77,52 @@ export default function SettingsScreen() {
   const exportMarkdown = async () => {
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      setStatus(await write(`thoughts-${stamp}.md`, await DB.dumpMarkdown(), 'text/markdown'));
+      setStatus(
+        await write(`thoughts-${stamp}.md`, await DB.dumpMarkdown(), 'text/markdown'),
+      );
     } catch (error) {
       setStatus(`Export failed: ${error}`);
     }
   };
 
+  const runImport = async (mode: DB.RestoreMode) => {
+    try {
+      // copyToCacheDirectory: false keeps the picked file's own
+      // content:// URI instead of copying it into this app's cache
+      // first - a copied file:// path was being checked against the
+      // app's own cache directory and failing that comparison for
+      // reasons that had nothing to do with whether it was readable.
+      //
+      // Reading it back is File, not the legacy reader: the legacy
+      // module only recognises SAF documents from the built-in
+      // "internal storage" provider and rejects anything else outright
+      // ("Unsupported scheme") - which is exactly what a file picked
+      // from Downloads is. File resolves a content:// URI through
+      // Android's own DocumentsContract instead of a provider
+      // allowlist, so it doesn't care which app is serving the file.
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: 'application/json',
+        copyToCacheDirectory: false,
+      });
+      if (picked.canceled) return setStatus('Import cancelled.');
+      const raw = await new File(picked.assets[0].uri).text();
+      await DB.restoreBackup(raw, mode);
+      dataChanged();
+      setStatus(mode === 'merge' ? 'Merged.' : 'Imported.');
+    } catch (error) {
+      setStatus(`That does not look like a backup (${error}).`);
+    }
+  };
+
   const importBackup = () =>
     Alert.alert(
-      'Replace everything?',
-      'Importing wipes the current areas and tasks and puts the backup in their place.',
+      'Import backup',
+      "Merge adds the file's areas and tasks to what is already here - an area with the same name keeps its tasks together instead of getting a duplicate. Replace wipes everything currently here first.",
       [
         { text: 'CANCEL', style: 'cancel' },
-        {
-          text: 'IMPORT',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              // copyToCacheDirectory: false keeps the picked file's own
-              // content:// URI instead of copying it into this app's cache
-              // first - a copied file:// path was being checked against the
-              // app's own cache directory and failing that comparison for
-              // reasons that had nothing to do with whether it was readable.
-              //
-              // Reading it back is File, not the legacy reader: the legacy
-              // module only recognises SAF documents from the built-in
-              // "internal storage" provider and rejects anything else outright
-              // ("Unsupported scheme") - which is exactly what a file picked
-              // from Downloads is. File resolves a content:// URI through
-              // Android's own DocumentsContract instead of a provider
-              // allowlist, so it doesn't care which app is serving the file.
-              const picked = await DocumentPicker.getDocumentAsync({
-                type: 'application/json',
-                copyToCacheDirectory: false,
-              });
-              if (picked.canceled) return setStatus('Import cancelled.');
-              const raw = await new File(picked.assets[0].uri).text();
-              await DB.restoreBackup(raw);
-              dataChanged();
-              setStatus('Imported.');
-            } catch (error) {
-              setStatus(`That does not look like a backup (${error}).`);
-            }
-          },
-        },
-      ]
+        { text: 'MERGE', onPress: () => runImport('merge') },
+        { text: 'REPLACE', style: 'destructive', onPress: () => runImport('replace') },
+      ],
     );
 
   return (
@@ -152,8 +165,8 @@ export default function SettingsScreen() {
       <View style={styles.rule} />
       <Text style={styles.section}>Share</Text>
       <Text style={styles.muted}>
-        Readable markdown of everything outside the trash - for sending to
-        someone, not for restoring.
+        Readable markdown of everything outside the trash - for sending to someone, not
+        for restoring.
       </Text>
       <Pressable onPress={exportMarkdown} style={[styles.button, styles.outline]}>
         <Text style={styles.outlineText}>Export as text</Text>

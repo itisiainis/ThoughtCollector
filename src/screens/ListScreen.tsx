@@ -26,7 +26,7 @@ import QuickCapture from '../components/QuickCapture';
 import { AreaEditor, TaskEditor } from '../components/Editor';
 import * as DB from '../db';
 import { dataChanged, useDataChange } from '../events';
-import { copyArea, shareArea } from '../share';
+import { copyArea, copyTasks } from '../share';
 import * as T from '../theme';
 
 const SORT_LABELS: Record<string, string> = {
@@ -184,6 +184,7 @@ export default function ListScreen() {
         await DB.trashArea(item.id);
         dataChanged();
       }}
+      onCopy={() => copyArea(item, byArea[item.id] ?? [])}
       railSpacing={showRail}
     />
   );
@@ -291,6 +292,7 @@ export default function ListScreen() {
                 cycleSort(rogueSort, (next) => DB.setState('rogue_sort_mode', next))
               }
               onAdd={() => setEditingTask({ open: true, task: null, areaId: null })}
+              onCopy={() => copyTasks('Rogue Tasks', rogue)}
               onLayoutY={(y) => (offsets.current['rogue'] = y)}
               railSpacing={showRail}
             />
@@ -344,7 +346,6 @@ export default function ListScreen() {
                   onAdd={() =>
                     setEditingTask({ open: true, task: null, areaId: area.id })
                   }
-                  onShare={() => shareArea(area, byArea[area.id] ?? [])}
                   onCopy={() => copyArea(area, byArea[area.id] ?? [])}
                   railSpacing={showRail}
                 />
@@ -437,7 +438,6 @@ function SectionHeader({
   sort,
   onSort,
   onAdd,
-  onShare,
   onCopy,
   onLayoutY,
   railSpacing = false,
@@ -448,7 +448,6 @@ function SectionHeader({
   sort: string;
   onSort: () => void;
   onAdd: () => void;
-  onShare?: () => void;
   onCopy?: () => void;
   onLayoutY?: (y: number) => void;
   railSpacing?: boolean;
@@ -504,17 +503,9 @@ function SectionHeader({
         <View style={styles.gap} />
 
         <View style={styles.headerActions}>
-          {/* Copy sits to the left of share so share keeps the place it has
-              always had - this group is pinned to the right edge, so anything
-              added on the far side would push it. */}
           {onCopy && (
             <Pressable onPress={onCopy} hitSlop={8} style={styles.iconButton}>
               <Ionicons name="copy-outline" size={17} color="#000000DE" />
-            </Pressable>
-          )}
-          {onShare && (
-            <Pressable onPress={onShare} hitSlop={8} style={styles.iconButton}>
-              <Ionicons name="share-social-outline" size={17} color="#000000DE" />
             </Pressable>
           )}
           <Pressable onPress={onSort} style={styles.sortButton} hitSlop={6}>

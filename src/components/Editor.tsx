@@ -24,7 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AreaChips from './AreaChips';
 import Flash, { useFlash } from './Flash';
 import * as DB from '../db';
-import { copyArea, copyTask, shareArea, shareTask } from '../share';
+import { copyArea, copyTask } from '../share';
 import * as T from '../theme';
 
 const TOP_GAP = 12;
@@ -100,11 +100,6 @@ export function AreaEditor({ visible, area, onClose, onChanged }: AreaEditorProp
       await DB.listTasks(edited.id),
     ] as const;
 
-  const share = async () => {
-    if (!area) return;
-    await shareArea(...(await outgoing(area)));
-  };
-
   const copy = async () => {
     if (!area) return;
     await copyArea(...(await outgoing(area)));
@@ -115,7 +110,6 @@ export function AreaEditor({ visible, area, onClose, onChanged }: AreaEditorProp
       visible={visible}
       title={creating ? 'New area' : 'Area'}
       onDismiss={close}
-      onShare={creating ? undefined : share}
       onCopy={creating ? undefined : copy}
     >
       <GrowingInput
@@ -243,11 +237,6 @@ export function TaskEditor({
     return [{ ...edited, name, description }, area?.name ?? null] as const;
   };
 
-  const share = async () => {
-    if (!task) return;
-    await shareTask(...outgoing(task));
-  };
-
   const copy = async () => {
     if (!task) return;
     await copyTask(...outgoing(task));
@@ -258,7 +247,6 @@ export function TaskEditor({
       visible={visible}
       title={creating ? 'New task' : 'Task'}
       onDismiss={close}
-      onShare={creating ? undefined : share}
       onCopy={creating ? undefined : copy}
     >
       <GrowingInput
@@ -370,14 +358,12 @@ function Shell({
   visible,
   title,
   onDismiss,
-  onShare,
   onCopy,
   children,
 }: {
   visible: boolean;
   title: string;
   onDismiss: () => void;
-  onShare?: () => void;
   onCopy?: () => void;
   children: React.ReactNode;
 }) {
@@ -410,17 +396,10 @@ function Shell({
           >
             <View style={styles.titleRow}>
               <Text style={styles.dialogTitle}>{title}</Text>
-              {/* Same pair, same order as a section header's: copy first, then
-                  share. */}
               <View style={styles.titleActions}>
                 {onCopy && (
-                  <Pressable onPress={onCopy} hitSlop={10} style={styles.shareButton}>
+                  <Pressable onPress={onCopy} hitSlop={10} style={styles.copyButton}>
                     <Ionicons name="copy-outline" size={22} color="#1565C0" />
-                  </Pressable>
-                )}
-                {onShare && (
-                  <Pressable onPress={onShare} hitSlop={10} style={styles.shareButton}>
-                    <Ionicons name="share-social-outline" size={22} color="#1565C0" />
                   </Pressable>
                 )}
               </View>
@@ -477,7 +456,7 @@ const styles = StyleSheet.create({
   },
   dialogTitle: { fontSize: 22, fontWeight: '600' },
   titleActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  shareButton: { paddingHorizontal: 4, paddingVertical: 2 },
+  copyButton: { paddingHorizontal: 4, paddingVertical: 2 },
   input: {
     borderWidth: 1,
     borderColor: '#9E9E9E',

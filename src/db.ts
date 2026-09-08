@@ -514,31 +514,94 @@ function taskLines(task: Task): string[] {
   return out;
 }
 
-/** All or nothing - a half-applied import would be worse than a failed one. */
-export async function restoreBackup(raw: string): Promise<void> {
+export type RestoreMode = 'merge' | 'replace';
+
+/**
+ * All or nothing - a half-applied import would be worse than a failed one.
+ *
+ * 'replace' wipes the database and loads the file's own rows verbatim, ids
+ * included. 'merge' keeps everything already here: an incoming area folds
+ * into an existing one of the same name rather than duplicating it, and
+ * every row otherwise lands as a new one with an id the database hands out
+ * itself - the file's own ids only mean anything inside the file they came
+ * from, and reusing them here would either collide with what already
+ * exists or silently steal the identity of an unrelated row that happens
+ * to already sit at that id.
+ */
+export async function restoreBackup(
+  raw: string,
+  mode: RestoreMode = 'replace',
+): Promise<void> {
   const payload = JSON.parse(raw);
   if (payload.version !== BACKUP_VERSION) {
     throw new Error(`unsupported backup version ${payload.version}`);
   }
-  await (
-    await handle()
-  ).withTransactionAsync(async () => {
-    await (
-      await handle()
-    ).execAsync('DELETE FROM tasks; DELETE FROM areas; DELETE FROM app_state;');
-    for (const table of ['areas', 'tasks', 'app_state'] as const) {
-      for (const row of payload[table] ?? []) {
-        // Column list comes from the file, so a backup written by an older
-        // build still loads as long as its columns still exist.
-        const cols = Object.keys(row);
-        const placeholders = cols.map(() => '?').join(', ');
-        await (
-          await handle()
-        ).runAsync(
-          `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`,
-          Object.values(row) as any[],
-        );
+  const db = await handle();
+  await db.withTransactionAsync(async () => {
+    if (mode === 'replace') {
+      await db.execAsync('DELETE FROM tasks; DELETE FROM areas; DELETE FROM app_state;');
+      for (const table of ['areas', 'tasks', 'app_state'] as const) {
+        for (const row of payload[table] ?? []) {
+          // Column list comes from the file, so a backup written by an older
+          // build still loads as long as its columns still exist.
+          const cols = Object.keys(row);
+          const placeholders = cols.map(() => '?').join(', ');
+          await db.runAsync(
+            `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${placeholders})`,
+            Object.values(row) as any[],
+          );
+        }
       }
+      return;
     }
+
+    // Matched by name against what is already here, not against anything
+    // else in the same file - two areas in the file with the same name
+    // still both fold into the one local area, the same as if they had
+    // been merged in one at a time.
+    const existingAreas = await db.getAllAsync<{ id: number; name: string }>(
+      'SELECT id, name FROM areas WHERE deleted_at IS NULL',
+    );
+    const localIdByName = new Map(existingAreas.map((a) => [a.name.trim(), a.id]));
+
+    // Old (file) area id -> local area id, whether that local id already
+    // existed or was just created for this import.
+    const areaIdMap = new Map<number, number>();
+    for (const row of payload.areas ?? []) {
+      const matched = localIdByName.get(String(row.name ?? '').trim());
+      if (matched != null) {
+        areaIdMap.set(row.id, matched);
+        continue;
+      }
+      const { id, ...fields } = row;
+      const cols = Object.keys(fields);
+      const placeholders = cols.map(() => '?').join(', ');
+      const result = await db.runAsync(
+        `INSERT INTO areas (${cols.join(', ')}) VALUES (${placeholders})`,
+        Object.values(fields) as any[],
+      );
+      areaIdMap.set(id, result.lastInsertRowId);
+    }
+
+    for (const row of payload.tasks ?? []) {
+      const { id, area_id, orphaned_from_area_id, ...fields } = row;
+      const cols = Object.keys(fields);
+      const values = Object.values(fields) as any[];
+      cols.push('area_id', 'orphaned_from_area_id');
+      values.push(
+        area_id == null ? null : (areaIdMap.get(area_id) ?? null),
+        orphaned_from_area_id == null
+          ? null
+          : (areaIdMap.get(orphaned_from_area_id) ?? null),
+      );
+      const placeholders = cols.map(() => '?').join(', ');
+      await db.runAsync(
+        `INSERT INTO tasks (${cols.join(', ')}) VALUES (${placeholders})`,
+        values,
+      );
+    }
+
+    // app_state is left alone on merge: sort-mode preferences and folded-card
+    // keys are keyed by ids that no longer mean the same thing after this.
   });
 }

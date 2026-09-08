@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
+    "emu": "set \"REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2\" && expo start --port 8082",
     "start": "expo start",
     "android": "expo run:android",
     "postinstall": "patch-package"

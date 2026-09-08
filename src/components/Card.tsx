@@ -47,6 +47,10 @@ interface Props {
   onToggle: () => void;
   onOpen: () => void;
   onDelete: () => void;
+  /** A second, faster way to copy than opening the editor - shown next to the
+   * chevron when given. Areas get it here; tasks already have the editor's
+   * own copy button and don't need a second one on the card itself. */
+  onCopy?: () => void;
   /** Tasks are rounded, areas are square - see the note in theme.ts. */
   rounded?: boolean;
   /** While a sibling in this same list is being dragged, every card folds its
@@ -68,6 +72,7 @@ function Card(props: Props) {
     onToggle,
     onOpen,
     onDelete,
+    onCopy,
     rounded = false,
     forceCollapsed = false,
     railSpacing = false,
@@ -82,9 +87,9 @@ function Card(props: Props) {
   const [textHeight, setTextHeight] = useState(0);
 
   const hasDescription = description.trim().length > 0;
-  // With no chevron to show, the fold zone's reserved gap past the name has
-  // nothing left to justify it.
-  const trimRow = !hasDescription;
+  // With no chevron to show and no copy button to push into place, the fold
+  // zone's reserved gap past the name has nothing left to justify it.
+  const trimRow = !hasDescription && !onCopy;
   const measured = textHeight > 0;
   const fullHeight = Math.ceil(textHeight) + BODY_PADDING;
 
@@ -283,16 +288,28 @@ function Card(props: Props) {
             {/* The chevron follows the name, a little clear of it, and the
                 whole empty rest of the row folds with it. Parked at the far
                 right it was a 38px target with a dead row either side of it -
-                every tap on the empty middle of the row did nothing at all. */}
-            {!trimRow && (
-              <Pressable onPress={onToggle} style={styles.foldZone}>
-                {hasDescription && (
+                every tap on the empty middle of the row did nothing at all.
+                A card with no description has nothing for that big a
+                pressable to toggle, so it is a plain spacer instead - it only
+                exists at all here to push a copy button clear to the edge. */}
+            {!trimRow &&
+              (hasDescription ? (
+                <Pressable onPress={onToggle} style={styles.foldZone}>
                   <Ionicons
                     name={open ? 'chevron-down' : 'chevron-forward'}
                     size={CHEVRON_SIZE}
                     color="rgba(0,0,0,0.55)"
                   />
-                )}
+                </Pressable>
+              ) : (
+                <View style={styles.foldZone} />
+              ))}
+
+            {/* A second, faster way to copy than opening the editor - see the
+                note on the prop. */}
+            {onCopy && (
+              <Pressable onPress={onCopy} hitSlop={8} style={styles.copyButton}>
+                <Ionicons name="copy-outline" size={16} color="rgba(0,0,0,0.55)" />
               </Pressable>
             )}
           </View>
@@ -432,10 +449,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'stretch',
-    position:'relative',
+    position: 'relative',
     paddingLeft: T.EDGE_GAP,
     //marginRight: -T.RAIL_WIDTH,
   },
+  // A plain icon button, not grown or grabbing any space of its own - the
+  // fold zone before it has already claimed the row's leftover width, so
+  // this always lands flush at the row's own right edge.
+  copyButton: { paddingHorizontal: 6 },
   bodyClip: { overflow: 'hidden' },
   body: { paddingHorizontal: 10, paddingVertical: 7 },
   bodyText: { fontSize: 14, lineHeight: T.BODY_LINE_HEIGHT },
